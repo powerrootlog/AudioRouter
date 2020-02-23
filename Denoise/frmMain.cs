@@ -41,13 +41,13 @@ namespace Denoise
             int count = getSpeakerCount();
             for (int i = 0; i < count; i++)
                 cmbSpeaker.Items.Add(getSpeakerList(i));
-            if (count > 0) 
+            if (count > 0)
                 cmbSpeaker.SelectedIndex = 0;
 
             count = getMicCount();
             for (int i = 0; i < count; i++)
                 cmbMic.Items.Add(getMicList(i));
-            if (count > 0) 
+            if (count > 0)
                 cmbMic.SelectedIndex = 0;
         }
 

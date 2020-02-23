@@ -22,6 +22,7 @@ private:
 	DWORD DoRouterThread();
 
 	bool LoadFormat();
+	bool InitializeAudioEngine();
 
 	STDMETHOD(OnDisplayNameChanged) (LPCWSTR /*NewDisplayName*/, LPCGUID /*EventContext*/) { return S_OK; };
 	STDMETHOD(OnIconPathChanged) (LPCWSTR /*NewIconPath*/, LPCGUID /*EventContext*/) { return S_OK; };
@@ -54,7 +55,8 @@ private:
 	IAudioCaptureClient* _CaptureClient;
 	IAudioRenderClient* _RenderClient;
 	WAVEFORMATEX* _MixFormat;
-
+	size_t	_FrameSize;
+	UINT32 _BufferSize;
 
 };
 

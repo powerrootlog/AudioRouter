@@ -14,7 +14,9 @@ Router::Router() :
 	_RouterThreadHandle(nullptr),
 	_StopEvent(nullptr),
 	_AudioSamplesReadyEvent(nullptr),
-	_MixFormat(nullptr)
+	_MixFormat(nullptr),
+	_BufferSize(0),
+	_FrameSize(0)
 {
 }
 
@@ -61,7 +63,43 @@ DWORD Router::DoRouterThread()
 		case WAIT_OBJECT_0 + 0:			// _StopEvent
 			stillPlaying = false;
 			break;
-		case  WAIT_OBJECT_0 + 1:
+		case  WAIT_OBJECT_0 + 1:		// _AudioSampleReadyEvent
+			BYTE* pInData;
+			UINT32 inFramesAvailable;
+			DWORD  flags;
+			BYTE* pOutData;
+			UINT32 padding;
+			UINT32 outFramesAvailable;
+
+			hr = _CaptureClient->GetBuffer(&pInData, &inFramesAvailable, &flags, NULL, NULL);
+			if (SUCCEEDED(hr))
+			{
+				hr = _RenderAudioClient->GetCurrentPadding(&padding);
+				if (SUCCEEDED(hr))
+				{
+					outFramesAvailable = _BufferSize - padding;
+					//UINT32 framesToWrite = min(inFramesAvailable, outFramesAvailable);
+					if (inFramesAvailable > outFramesAvailable)
+						Sleep(10);
+					hr = _RenderClient->GetBuffer(inFramesAvailable, &pOutData);
+					if (SUCCEEDED(hr))
+					{
+						CopyMemory(pOutData, pInData, inFramesAvailable * _FrameSize);
+						hr = _RenderClient->ReleaseBuffer(inFramesAvailable, 0);
+						if (!SUCCEEDED(hr))
+						{
+							printf("Unable to release render buffe: %x\n", hr);
+							stillPlaying = false;
+						}
+
+					}
+				}
+				hr = _CaptureClient->ReleaseBuffer(inFramesAvailable);
+				if (FAILED(hr))
+				{
+					_RPTF1(_CRT_WARN, "Unable to release capture buffer: %x!\n", hr);
+				}
+			}
 			break;
 		default:
 			_RPTF1(_CRT_WARN, "Wait error: %d\n", GetLastError());
@@ -100,6 +138,56 @@ bool Router::LoadFormat()
 	{
 		return false;
 	}
+	_FrameSize = (_MixFormat->wBitsPerSample / 8) * _MixFormat->nChannels;
+	return true;
+}
+
+bool Router::InitializeAudioEngine()
+{
+	LONG        EngineLatencyInMS = 100;
+
+	HRESULT hr = _RouterAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_NOPERSIST, EngineLatencyInMS * 10000, 0, _MixFormat, NULL);
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to initialize router audio client: %x.\n", hr);
+		return false;
+	}
+
+	hr = _RouterAudioClient->GetBufferSize(&_BufferSize);
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to get audio client buffer: %x. \n", hr);
+		return false;
+	}
+
+	hr = _RouterAudioClient->SetEventHandle(_AudioSamplesReadyEvent);
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to set ready event: %x.\n", hr);
+		return false;
+	}
+
+	hr = _RouterAudioClient->GetService(IID_PPV_ARGS(&_CaptureClient));
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to get new capture client: %x.\n", hr);
+		return false;
+	}
+
+	hr = _RenderAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_NOPERSIST, EngineLatencyInMS * 10000, 0, _MixFormat, NULL);
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to initialize render audio client: %x.\n", hr);
+		return false;
+	}
+
+	hr = _RenderAudioClient->GetService(IID_PPV_ARGS(&_RenderClient));
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to get new render client: %x.\n", hr);
+		return false;
+	}
+
 
 	return true;
 }
@@ -147,15 +235,36 @@ bool Router::Initialize(IMMDevice* RouterDev, IMMDevice* RenderDev)
 		return false;
 	}
 
+	if (!InitializeAudioEngine())
+	{
+		return false;
+	}
+
 	return true;
 }
 
 bool Router::Start()
 {
+	HRESULT hr;
+
 	_RouterThreadHandle = CreateThread(NULL, 0, RouterThread, this, 0, NULL);
 	if (_RouterThreadHandle == NULL)
 	{
 		_RPTF1(_CRT_WARN, "Unable to create router thread: %x.", GetLastError());
+		return false;
+	}
+
+	hr = _RenderAudioClient->Start();
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to start render client: %x.\n", hr);
+		return false;
+	}
+
+	hr = _RouterAudioClient->Start();
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to start capture client: %x.\n", hr);
 		return false;
 	}
 
@@ -164,9 +273,23 @@ bool Router::Start()
 
 bool Router::Stop()
 {
+	HRESULT hr;
+
 	if (_StopEvent)
 	{
 		SetEvent(_StopEvent);
+	}
+
+	hr = _RouterAudioClient->Stop();
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to stop router audio client: %x\n", hr);
+	}
+
+	hr = _RenderAudioClient->Stop();
+	if (FAILED(hr))
+	{
+		_RPTF1(_CRT_WARN, "Unable to stop render audio client: %x\n", hr);
 	}
 
 	if (_RouterThreadHandle)
